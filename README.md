@@ -1,3 +1,5 @@
+No copyright or license is claimed on any of the example image files or files with the extension .bmp
+
 # ImagePacker
 
 This is a simple python script to extract and repack the image files for the PS2 Fate/Stay Night Realta Nua.
