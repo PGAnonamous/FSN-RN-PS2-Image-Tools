@@ -1,151 +1,91 @@
-#!/usr/bin/env python
-import string, re, sys, os, os.path, struct, fnmatch
-from struct import unpack, pack
+import os, sys, argparse
+from fnmatch import filter
+from struct import *
+from typing import BinaryIO
+from pathlib import Path
+from collections import namedtuple
 
-if sys.version_info[0] < 3 :
-	print('Must be using Python 3')
-	sys.exit(0)
+image_format = '<4xI4xI'
+rnimage_format = '<8x6I'
+iif_format = '<4s3I'
+iif_magic = b'\x49\x49\x46\x31'
+clutDepths = { 0x13 : 3, 0x14 : 5 , 3 : 0x13, 5 : 0x14}
+realBitDepths = { 0x13 : 0, 0x14 : 1, 3 : 0, 5 : 1}
+clutSizes = { 0x13 : 0x400, 0x14 : 0x40 , 3 : 0x400, 5 : 0x40 }
 
-if len(sys.argv) != 4 :
-   print('Please give an option an input file and an output directory')
-   sys.exit(0)
-   
-if sys.argv[1] == '-e' :
-		
-	infile = open(sys.argv[2],'rb')
-	
-	directory = sys.argv[3]
-	
-	if not os.path.exists(directory):
-		os.makedirs(directory)
-	
-	save_path = os.path.join(os.getcwd(), directory)
-	
-	HEAD = bytearray(b'\x49\x49\x46\x31')
-	
-	infile.seek(4)
-	FILES = int.from_bytes(infile.read(4), byteorder='little')
-	if FILES == 0 :
-		print('This file probably does not contain images')
-		sys.exit(0)
-	infile.seek(32)
-	
-	i = 0
-	tmp = 28
-	
-	while i < FILES :
-		infile.seek(tmp+(i*32))
-		BITS = int.from_bytes(infile.read(4), byteorder='little')
-		WIDTH = infile.read(4)
-		HEIGHT = infile.read(4)
-		OFFSETCLUT = int.from_bytes(infile.read(4), byteorder='little')
-		OFFSETDATA = int.from_bytes(infile.read(4), byteorder='little')
-		if i == (FILES-1) :
-			infile.seek(12)
-		else :
-			infile.seek(tmp+(i*32)+48)
-		SIZE = int.from_bytes(infile.read(4), byteorder='little') - OFFSETDATA
-		infile.seek(OFFSETCLUT)
-		if BITS == 19 :
-			CLUT = infile.read(1024)
-			TYPE = bytearray(b'\x03\x00\x00\x00')
-		if BITS == 20 :
-			CLUT = infile.read(64)
-			TYPE = bytearray(b'\x05\x00\x00\x00')
-		infile.seek(OFFSETDATA)
-		DATA = infile.read(SIZE)
-		outfile = os.path.join(save_path, str(i)+".iif")
-		file = open(outfile,'wb')
-		file.write(HEAD+WIDTH+HEIGHT+TYPE+CLUT+DATA)
-		file.close()
-		i += 1
-	
-	
-	
-	infile.close()
-elif sys.argv[1] == '-c' :
-		
-	outfile = open(sys.argv[3],'wb')
-	
-	directory = sys.argv[2]
-	
-	if not os.path.exists(directory):
-		print(directory+' does not exist')
-		sys.exit(0)
-		
-	files = fnmatch.filter(os.listdir(directory), '*.iif')
-	if len(files) == 0 :
-		print('No .iif files found')
-		sys.exit(0)
-	
-	save_path = os.path.join(os.getcwd(), directory)
-	
-	ZEROS = bytearray(b'\x00\x00\x00\x00')
-	
-	#Write the Header
-	outfile.write(ZEROS+len(files).to_bytes(4, byteorder='little')+ZEROS+ZEROS)
-	i = 0
-	while i < len(files) :
-		infilepath = os.path.join(save_path, str(i)+".iif")
-		infile = open(infilepath, 'rb')
-		infile.seek(4)
-		SIZE = infile.read(8)
-		iiftype = int.from_bytes(infile.read(4), byteorder='little')
-		if (iiftype == 5) :
-			TYPE = bytearray(b'\x00\x00\x00\x00\x00\x00\x00\x00\x08\x00\x00\x00\x14\x00\x00\x00')
-		if iiftype == 3 or (iiftype == 0) :
-			TYPE = bytearray(b'\x00\x00\x00\x00\x00\x00\x00\x00\x08\x00\x00\x00\x13\x00\x00\x00')
-		outfile.write(TYPE+SIZE+ZEROS+ZEROS)
-		infile.close()
-		i += 1
+parser = argparse.ArgumentParser(description='Extract iif file images from packed FSNRN PS2 data file')
+parser.add_argument('input', metavar='N', type=Path, help='Path to input file or folder')
+parser.add_argument('output', metavar='N', type=Path, help='Path to output file or folder')
+args = parser.parse_args()
 
-	headerlen = outfile.tell()
-	
-	#Write the clut data and clut offset
-	i = 0
-	while i < len(files) :
-		infilepath = os.path.join(save_path, str(i)+".iif")
-		infile = open(infilepath, 'rb')
-		infile.seek(12)
-		iiftype = int.from_bytes(infile.read(4), byteorder='little')
-		if (iiftype == 5) :
-			length = 64
-		if (iiftype == 3) or (iiftype == 0) :
-			length = 1024
-		CLUT = infile.read(length)
-		OFFSET = (outfile.tell()).to_bytes(4, byteorder='little')
-		outfile.seek(40+(i*32))
-		outfile.write(OFFSET)
-		outfile.seek(0, 2)
-		outfile.write(CLUT)
-		infile.close()
-		i += 1
-		
-	#Write the image data and image offset
-	i = 0
-	while i < len(files) :
-		infilepath = os.path.join(save_path, str(i)+".iif")
-		infile = open(infilepath, 'rb')
-		infile.seek(12)
-		iiftype = int.from_bytes(infile.read(4), byteorder='little')
-		if (iiftype == 5) :
-			infile.seek(64+16)
-		if (iiftype == 3) or (iiftype == 0) :
-			infile.seek(1024+16)
-		DATA = infile.read()
-		OFFSET = (outfile.tell()).to_bytes(4, byteorder='little')
-		outfile.seek(44+(i*32))
-		outfile.write(OFFSET)
-		outfile.seek(0, 2)
-		outfile.write(DATA)
-		infile.close()
-		i += 1
-	
-	#Write the final filesize offset
-	OFFSET = (outfile.tell()).to_bytes(4, byteorder='little')
-	outfile.seek(12)
-	outfile.write(OFFSET)
-	outfile.close()
-else :
-	print('Usage:\nscript.py -e input.dat outdir  to extract\nscript.py -c indir out.dat     to pack')
-	sys.exit(0)
+class image:
+    def __init__(self):
+        self.header = namedtuple('header', ['numImages', 'fileSize'])
+        self.rnimage = namedtuple('rnimage', ['colorDepth', 'bitDepth', 'width', 'height', 'clut_offset', 'data_offset'])
+        self.iif = namedtuple('iif', ['magic', 'width', 'height', 'type'])
+        self.image_list = list()
+        self.iif_list = list()
+        
+    def read(self, stream: BinaryIO):
+        self.header = self.header._make(unpack(image_format, stream.read(calcsize(image_format))))
+        for i in range(self.header.numImages):
+            self.image_list.append(self.rnimage._make(unpack(rnimage_format, stream.read(calcsize(rnimage_format)))))
+    
+    def toiif(self, istream: BinaryIO, path):
+        for n, i in enumerate(self.image_list) :
+            with open(os.path.join(path, str(n)+'.iif'), 'wb+') as ostream :
+                ostream.write(pack(iif_format, iif_magic, i.width, i.height, clutDepths.get(i.bitDepth)))
+                istream.seek(i.clut_offset)
+                ostream.write(istream.read(clutSizes.get(i.bitDepth)))
+                istream.seek(i.data_offset)
+                ostream.write(istream.read((i.width*i.height) >> realBitDepths.get(i.bitDepth)))
+    
+    def toRN_image(self, files, ostream: BinaryIO):
+        files = sorted(files.glob('*.iif'), key=(lambda file : int(file.stem)))
+        self.header._fields_defaults
+        self.rnimage._fields_defaults
+        self.header.numImages = len(files)
+        ostream.write(pack(image_format, self.header.numImages, 0))
+        clut = list()
+        data = list()
+        self.rnimage.colorDepth = 8 # default to this. I'm not actualy sure what it is there for
+        headerSize = len(files)*calcsize(rnimage_format)
+        ostream.write(b'\x00' * headerSize)
+        for n, file in enumerate(files):
+            with file.open(mode='rb') as istream:
+                self.iif_list.append(self.iif._make(unpack(iif_format, istream.read(calcsize(iif_format)))))
+                clut.append(istream.read(clutSizes.get(self.iif_list[n].type)))
+                data.append(istream.read((self.iif_list[n].width*self.iif_list[n].height) >> realBitDepths.get(self.iif_list[n].type)))
+        del files
+        for n, i in enumerate(self.iif_list):
+            self.rnimage.bitDepth = clutDepths[i.type]
+            self.rnimage.width = i.width
+            self.rnimage.height = i.height
+            self.image_list.append(pack(rnimage_format, self.rnimage.colorDepth, self.rnimage.bitDepth, self.rnimage.width,
+                                        self.rnimage.height, ostream.tell(), 0))
+            ostream.write(clut[n])
+        del clut
+        for n, i in enumerate(self.iif_list):
+            self.image_list[n] = self.image_list[n][:-4] + pack('<I', ostream.tell())
+            ostream.write(data[n])
+            ostream.write(bytearray(b'\x00' * (ostream.tell() % 16)))
+        del data, headerSize
+        EOF = ostream.tell()
+        ostream.seek(0xC)
+        ostream.write(pack('<I', EOF))
+        del EOF
+        for i in self.image_list: ostream.write(i)
+            
+if __name__ == '__main__':
+    test = image()
+    if args.input.is_file()  :
+        with open(sys.argv[1], 'rb') as stream :
+            test.read(stream)
+            args.output.mkdir(exist_ok=True)
+            test.toiif(stream, args.output)
+    elif args.input.is_dir:
+        with args.output.open(mode='wb+') as stream :
+            test.toRN_image(args.input, stream)
+    sys.exit()
+    
+        
